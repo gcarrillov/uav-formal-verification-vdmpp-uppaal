@@ -1,0 +1,135 @@
+-- ============================================================================
+-- Modelo Formal NuSMV: Controlador de Dron Cuadricoptero Autonomo
+-- Corresponde al Sistema de Transicion de Estados M = (Q, V, q0, sigma0, T)
+-- Curso: Aspectos Formales de Especificacion y Verificacion (UNSA, 2026)
+-- ============================================================================
+MODULE main
+
+VAR
+    -- Modo de vuelo activo (Q = {VN, EV, RB, AE})
+    modo              : {VN, EV, RB, AE};
+
+    -- Presupuesto energetico discreto (pasos de 10%; retorno=20, reserva=10 => minimo 30)
+    energia           : {30, 40, 50, 60, 70, 80, 90, 100};
+    bateria_baja      : boolean;
+
+    -- Integridad de propulsion (numero de helices activas: 4..2)
+    helices_activas   : 2..4;
+
+    -- Eventos del entorno: proximidad en zona de alerta [7m, 12m) y alarma ambiental CRITICO
+    alerta_proximidad : boolean;
+    alarma_critica    : boolean;
+
+DEFINE
+    E_RETORNO := 20;
+    E_RESERVA := 10;
+    E_UMBRAL  := E_RETORNO + E_RESERVA; -- 30
+
+    -- Predicados auxiliares del STE (hw_ok y sep_ok)
+    hw_ok  := (helices_activas >= 3) & !alarma_critica;
+    sep_ok := !alerta_proximidad;
+
+ASSIGN
+    -- Estado inicial q0, sigma0
+    init(modo)              := VN;
+    init(energia)           := 100;
+    init(bateria_baja)      := FALSE;
+    init(helices_activas)   := 4;
+    init(alerta_proximidad) := FALSE;
+    init(alarma_critica)    := FALSE;
+
+    -- Evolucion de energia (INV1: nunca cae por debajo de E_UMBRAL = 30; consumo monotono)
+    next(energia) := case
+        modo = AE                       : energia;
+        energia = 100                   : {100, 90};
+        energia = 90                    : {90, 80};
+        energia = 80                    : {80, 70};
+        energia = 70                    : {70, 60};
+        energia = 60                    : {60, 50};
+        energia = 50                    : {50, 40};
+        energia = 40                    : {40, 30};
+        energia = 30                    : 30;
+    esac;
+
+    -- Activacion de bateria_baja cuando se alcanza el umbral minimo (se mantiene verdadera)
+    next(bateria_baja) := case
+        bateria_baja                    : TRUE;
+        energia = E_UMBRAL              : TRUE;
+        TRUE                            : FALSE;
+    esac;
+
+    -- Fallas de propulsores (monotono no creciente: las helices no se autorreparan en vuelo)
+    next(helices_activas) := case
+        modo = AE                       : helices_activas;
+        helices_activas = 4             : {4, 3};
+        helices_activas = 3             : {3, 2};
+        TRUE                            : 2;
+    esac;
+
+    -- Dinamica del entorno (no determinista mientras no haya aterrizado en emergencia)
+    next(alerta_proximidad) := case
+        modo = AE                       : alerta_proximidad;
+        TRUE                            : {FALSE, TRUE};
+    esac;
+
+    next(alarma_critica) := case
+        alarma_critica                  : TRUE;
+        modo = AE                       : alarma_critica;
+        TRUE                            : {FALSE, TRUE};
+    esac;
+
+    -- Relacion de transicion determinista T1..T8 del controlador de vuelo
+    -- Prioridad estricta: AE > EV > RB > VN
+    next(modo) := case
+        -- T8: Pozo final seguro absorbente
+        modo = AE                                           : AE;
+        -- T5, T6, T7: Perdida critica de hardware (< 3 helices) o alarma critica
+        !hw_ok                                              : AE;
+        -- Desde RETORNO_BASE, si HW sigue operativo, permanece en retorno
+        modo = RB & hw_ok                                   : RB;
+        -- T1 (desde VN) y permanencia en EV: evasion prevalece sobre retorno
+        (modo = VN | modo = EV) & hw_ok & !sep_ok           : EV;
+        -- T3 (VN -> RB) y T4 (EV -> RB): bateria baja con separacion segura
+        (modo = VN | modo = EV) & hw_ok & sep_ok & bateria_baja : RB;
+        -- T2 (EV -> VN) y permanencia en VN: condiciones nominales
+        TRUE                                                : VN;
+    esac;
+
+-- ============================================================================
+-- PROPIEDADES FORMALES VERIFICADAS (LTL y CTL)
+-- ============================================================================
+
+-- P1 (Safety - INV1): La energia siempre respeta el umbral de retorno + reserva (>= 30)
+LTLSPEC G (energia >= E_UMBRAL & energia <= 100)
+CTLSPEC AG (energia >= E_UMBRAL & energia <= 100)
+
+-- P2 (Safety - INV5): El consumo energetico es monotono no creciente en todo paso
+LTLSPEC G (next(energia) <= energia)
+
+-- P3 (Safety - INV3/RF3): Las helices activas nunca se recuperan espontaneamente ni exceden 4
+LTLSPEC G (helices_activas >= 2 & helices_activas <= 4 & next(helices_activas) <= helices_activas)
+
+-- P4 (Safety - RF4/T5-T7): Menos de 3 helices o alarma critica conducen en el siguiente paso a AE
+LTLSPEC G (!hw_ok -> X (modo = AE))
+
+-- P5 (Safety - T8): ATERRIZAJE_EMERGENCIA es un pozo final absorbente (irreversible)
+LTLSPEC G (modo = AE -> G (modo = AE))
+CTLSPEC AG (modo = AE -> AG (modo = AE))
+
+-- P6 (Safety): RETORNO_BASE nunca vuelve a VUELO_NORMAL ni a EVASION (solo sigue en RB o pasa a AE)
+LTLSPEC G (modo = RB -> G (modo = RB | modo = AE))
+
+-- P7 (Safety - Prioridad EV > RB): Desde VN con HW operativo, alerta de proximidad activa EV
+LTLSPEC G ((modo = VN & hw_ok & !sep_ok) -> X (modo = EV))
+
+-- P8 (Liveness): Toda condicion critica (!hw_ok) garantiza eventualmente alcanzar AE
+LTLSPEC G (!hw_ok -> F (modo = AE))
+
+-- P9 (Reachability): Todos los modos de control (EV, RB, AE) son alcanzables desde el estado inicial
+CTLSPEC EF (modo = EV)
+CTLSPEC EF (modo = RB)
+CTLSPEC EF (modo = AE)
+
+-- P10 (Reachability de transiciones clave): T2 (EV -> VN) y T4 (EV -> RB) son realizables
+CTLSPEC EF (modo = EV & EX (modo = VN))
+CTLSPEC EF (modo = EV & EX (modo = RB))
