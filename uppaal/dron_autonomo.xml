@@ -1,0 +1,240 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE nta PUBLIC '-//Uppaal Team//DTD Flat System 1.1//EN' 'http://www.it.uu.se/research/group/darts/uppaal/flat-1_2.dtd'>
+<nta>
+	<declaration>// ============================================================================
+// Declaraciones Globales - Controlador de Dron Cuadricoptero Autonomo
+// Curso: Aspectos Formales de Especificacion y Verificacion (UNSA, 2026)
+// ============================================================================
+
+const int E_RETORNO     = 20;
+const int E_RESERVA     = 10;
+const int E_UMBRAL      = E_RETORNO + E_RESERVA; // 30% minimo (INV1)
+const int T_MAX_EVASION = 5;                     // Cota temporal de maniobra evasiva (u.t.)
+
+// Variables compartidas del sistema
+int[30, 100] energia         = 100;
+int[2, 4]    helices_activas = 4;
+bool         bateria_baja    = false;
+bool         alerta_proximidad = false;
+bool         alarma_critica  = false;
+
+// Canales broadcast de sincronizacion entre subcomponentes y controlador
+broadcast chan evadir;
+broadcast chan despejado;
+broadcast chan bat_baja_ev;
+broadcast chan emergencia;
+</declaration>
+	<template>
+		<name x="5" y="5">ControladorVuelo</name>
+		<declaration>// Reloj local para acotar la duracion de la maniobra de evasion 3D
+clock t_ev;
+</declaration>
+		<location id="id0" x="-272" y="-136">
+			<name x="-320" y="-170">VueloNormal</name>
+		</location>
+		<location id="id1" x="136" y="-136">
+			<name x="110" y="-170">Evasion</name>
+			<label kind="invariant" x="80" y="-190">t_ev &lt;= T_MAX_EVASION</label>
+		</location>
+		<location id="id2" x="-272" y="136">
+			<name x="-320" y="156">RetornoBase</name>
+		</location>
+		<location id="id3" x="136" y="136">
+			<name x="76" y="156">AterrizajeEmergencia</name>
+		</location>
+		<init ref="id0"/>
+		<transition>
+			<source ref="id0"/>
+			<target ref="id1"/>
+			<label kind="guard" x="-168" y="-212">helices_activas &gt;= 3 &amp;&amp; !alarma_critica</label>
+			<label kind="synchronisation" x="-100" y="-192">evadir?</label>
+			<label kind="assignment" x="-100" y="-172">t_ev = 0</label>
+			<nail x="-68" y="-170"/>
+		</transition>
+		<transition>
+			<source ref="id1"/>
+			<target ref="id0"/>
+			<label kind="guard" x="-184" y="-102">!bateria_baja &amp;&amp; helices_activas &gt;= 3 &amp;&amp; !alarma_critica</label>
+			<label kind="synchronisation" x="-100" y="-82">despejado?</label>
+			<nail x="-68" y="-102"/>
+		</transition>
+		<transition>
+			<source ref="id0"/>
+			<target ref="id2"/>
+			<label kind="guard" x="-440" y="-20">helices_activas &gt;= 3 &amp;&amp; !alarma_critica &amp;&amp; !alerta_proximidad</label>
+			<label kind="synchronisation" x="-360" y="0">bat_baja_ev?</label>
+		</transition>
+		<transition>
+			<source ref="id1"/>
+			<target ref="id2"/>
+			<label kind="guard" x="-160" y="-16">bateria_baja &amp;&amp; helices_activas &gt;= 3 &amp;&amp; !alarma_critica</label>
+			<label kind="synchronisation" x="-100" y="4">despejado?</label>
+		</transition>
+		<transition>
+			<source ref="id0"/>
+			<target ref="id3"/>
+			<label kind="synchronisation" x="-24" y="48">emergencia?</label>
+			<nail x="-68" y="68"/>
+		</transition>
+		<transition>
+			<source ref="id1"/>
+			<target ref="id3"/>
+			<label kind="synchronisation" x="148" y="-10">emergencia?</label>
+		</transition>
+		<transition>
+			<source ref="id2"/>
+			<target ref="id3"/>
+			<label kind="synchronisation" x="-108" y="144">emergencia?</label>
+		</transition>
+	</template>
+	<template>
+		<name>MonitorEnergia</name>
+		<declaration>// Reloj periodico de consumo de bateria
+clock c_bat;
+</declaration>
+		<location id="id4" x="-170" y="0">
+			<name x="-204" y="-34">Monitoreo</name>
+		</location>
+		<location id="id5" x="170" y="0">
+			<name x="128" y="-34">BateriaEnUmbral</name>
+		</location>
+		<init ref="id4"/>
+		<transition>
+			<source ref="id4"/>
+			<target ref="id4"/>
+			<label kind="guard" x="-340" y="-96">c_bat &gt;= 2 &amp;&amp; energia - 10 &gt;= E_UMBRAL</label>
+			<label kind="assignment" x="-320" y="-76">energia = energia - 10, c_bat = 0</label>
+			<nail x="-238" y="-60"/>
+			<nail x="-102" y="-60"/>
+		</transition>
+		<transition>
+			<source ref="id4"/>
+			<target ref="id5"/>
+			<label kind="guard" x="-102" y="-26">c_bat &gt;= 2 &amp;&amp; energia - 10 &lt; E_UMBRAL</label>
+			<label kind="synchronisation" x="-34" y="6">bat_baja_ev!</label>
+			<label kind="assignment" x="-68" y="24">bateria_baja = true, c_bat = 0</label>
+		</transition>
+	</template>
+	<template>
+		<name>SensorProximidad</name>
+		<declaration>// Reloj del sensor de separacion 3D (D_SEGURIDAD=7m, D_ALERTA=12m)
+clock c_sen;
+</declaration>
+		<location id="id6" x="-170" y="0">
+			<name x="-204" y="-34">Despejado</name>
+		</location>
+		<location id="id7" x="170" y="0">
+			<name x="116" y="-34">AlertaProximidad</name>
+			<label kind="invariant" x="112" y="-54">c_sen &lt;= T_MAX_EVASION</label>
+		</location>
+		<init ref="id6"/>
+		<transition>
+			<source ref="id6"/>
+			<target ref="id7"/>
+			<label kind="guard" x="-118" y="-86">c_sen &gt;= 1 &amp;&amp; helices_activas &gt;= 3 &amp;&amp; !alarma_critica</label>
+			<label kind="synchronisation" x="-26" y="-66">evadir!</label>
+			<label kind="assignment" x="-76" y="-48">alerta_proximidad = true, c_sen = 0</label>
+			<nail x="0" y="-42"/>
+		</transition>
+		<transition>
+			<source ref="id7"/>
+			<target ref="id6"/>
+			<label kind="guard" x="-34" y="42">c_sen &gt;= 1</label>
+			<label kind="synchronisation" x="-34" y="60">despejado!</label>
+			<label kind="assignment" x="-84" y="78">alerta_proximidad = false, c_sen = 0</label>
+			<nail x="0" y="42"/>
+		</transition>
+	</template>
+	<template>
+		<name>SistemaPropulsion</name>
+		<declaration>// Monitoreo de las 4 helices (Mueller &amp; D'Andrea, ICRA 2014) y alarma ambiental
+</declaration>
+		<location id="id8" x="-238" y="0">
+			<name x="-272" y="-34">Normal4</name>
+		</location>
+		<location id="id9" x="0" y="0">
+			<name x="-38" y="-34">Degradado3</name>
+		</location>
+		<location id="id10" x="238" y="-68">
+			<name x="180" y="-102">DegradadoHelicoidal</name>
+		</location>
+		<location id="id11" x="238" y="85">
+			<name x="190" y="102">AlarmaCritica</name>
+		</location>
+		<init ref="id8"/>
+		<transition>
+			<source ref="id8"/>
+			<target ref="id9"/>
+			<label kind="assignment" x="-178" y="-26">helices_activas = 3</label>
+		</transition>
+		<transition>
+			<source ref="id9"/>
+			<target ref="id10"/>
+			<label kind="synchronisation" x="68" y="-60">emergencia!</label>
+			<label kind="assignment" x="56" y="-42">helices_activas = 2</label>
+		</transition>
+		<transition>
+			<source ref="id8"/>
+			<target ref="id11"/>
+			<label kind="synchronisation" x="-60" y="76">emergencia!</label>
+			<label kind="assignment" x="-76" y="94">alarma_critica = true</label>
+			<nail x="-102" y="85"/>
+		</transition>
+		<transition>
+			<source ref="id9"/>
+			<target ref="id11"/>
+			<label kind="synchronisation" x="68" y="28">emergencia!</label>
+			<label kind="assignment" x="52" y="46">alarma_critica = true</label>
+		</transition>
+	</template>
+	<system>// Instanciacion concurrente de la red de automatas temporizados
+Controlador = ControladorVuelo();
+Energia     = MonitorEnergia();
+Sensor      = SensorProximidad();
+Propulsion  = SistemaPropulsion();
+
+system Controlador, Energia, Sensor, Propulsion;
+</system>
+	<queries>
+		<query>
+			<formula>A[] not deadlock</formula>
+			<comment>Q1 (Deadlock): El sistema concurrente de 4 automatas esta libre de bloqueos.</comment>
+		</query>
+		<query>
+			<formula>A[] (energia &gt;= E_UMBRAL and energia &lt;= 100)</formula>
+			<comment>Q2 (Safety - INV1): La bateria siempre preserva el umbral de retorno + reserva (&gt;= 30%).</comment>
+		</query>
+		<query>
+			<formula>A[] (helices_activas &gt;= 2 and helices_activas &lt;= 4)</formula>
+			<comment>Q3 (Safety - INV3): Integridad del conteo de helices activas.</comment>
+		</query>
+		<query>
+			<formula>A[] ((helices_activas &lt; 3 or alarma_critica) imply Controlador.AterrizajeEmergencia)</formula>
+			<comment>Q4 (Safety - RF4/INV7): Menos de 3 helices o alarma critica implican aterrizaje de emergencia.</comment>
+		</query>
+		<query>
+			<formula>A[] (Controlador.VueloNormal imply (helices_activas &gt;= 3 and not alarma_critica))</formula>
+			<comment>Q5 (Safety): El vuelo normal solo ocurre con hardware y alarma operativos.</comment>
+		</query>
+		<query>
+			<formula>A[] (Controlador.Evasion imply Controlador.t_ev &lt;= T_MAX_EVASION)</formula>
+			<comment>Q6 (Safety temporal): Toda maniobra evasiva cumple la cota de tiempo real (&lt;= 5 u.t.).</comment>
+		</query>
+		<query>
+			<formula>E&lt;&gt; Controlador.Evasion</formula>
+			<comment>Q7 (Reachability - T1): El modo EVASION es alcanzable.</comment>
+		</query>
+		<query>
+			<formula>E&lt;&gt; Controlador.RetornoBase</formula>
+			<comment>Q8 (Reachability - T3/T4): El modo RETORNO_BASE es alcanzable.</comment>
+		</query>
+		<query>
+			<formula>E&lt;&gt; Controlador.AterrizajeEmergencia</formula>
+			<comment>Q9 (Reachability - T5-T7): El modo ATERRIZAJE_EMERGENCIA es alcanzable.</comment>
+		</query>
+		<query>
+			<formula>Propulsion.DegradadoHelicoidal --&gt; Controlador.AterrizajeEmergencia</formula>
+			<comment>Q10 (Liveness): El estado de degradacion helicoidal siempre conduce a aterrizaje de emergencia.</comment>
+		</query>
+	</queries>
+</nta>
