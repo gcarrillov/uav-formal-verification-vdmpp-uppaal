@@ -1,0 +1,188 @@
+-- ============================================================================
+-- Clase: Dron (Controlador maestro unificado - Transiciones T1..T8, RF1..RF6)
+-- Prioridad estricta de seguridad: AE > EV > RB > VN
+-- ============================================================================
+class Dron is subclass of Tipos
+
+instance variables
+    private id             : IdDron;
+    private base_designada : IdBase;
+    private energia        : GestionEnergia    := new GestionEnergia();
+    private propulsion     : SistemaPropulsion := new SistemaPropulsion();
+    private espacio        : EspacioAereo      := new EspacioAereo();
+    private mision         : Mision            := new Mision();
+    private modo_vuelo     : ModoVuelo         := <VUELO_NORMAL>;
+    private alarma         : NivelAlarma       := <VERDE>;
+    private helices_ok     : nat               := 4;
+
+    -- INV7: Consistencia critica del controlador de modos
+    -- Menos de 3 helices activas o alarma CRITICO fuerzan ATERRIZAJE_EMERGENCIA
+    inv helices_ok <= 4
+        and ((helices_ok < 3 or alarma = <CRITICO>) =>
+             modo_vuelo = <ATERRIZAJE_EMERGENCIA>);
+
+operations
+    public Dron : IdDron * IdBase ==> Dron
+    Dron(i, b) == (
+        id := i;
+        base_designada := b;
+        energia := new GestionEnergia();
+        propulsion := new SistemaPropulsion();
+        espacio := new EspacioAereo();
+        mision := new Mision();
+        modo_vuelo := <VUELO_NORMAL>;
+        alarma := <VERDE>;
+        helices_ok := 4;
+    );
+
+    -- Evalua la maquina de estados determinista (transiciones T1..T8)
+    public EvaluarModoVuelo : () ==> ModoVuelo
+    EvaluarModoVuelo() == (
+        dcl hw_ok : bool := (helices_ok >= 3) and (alarma <> <CRITICO>);
+        dcl alerta_sep : bool := espacio.HayAlertaProximidad();
+        dcl requiere_retorno : bool := energia.EsBateriaBaja() or (alarma = <ROJO>);
+
+        -- T8 (pozo seguro absorbente) y T5, T6, T7 (perdida critica HW o alarma CRITICO -> AE)
+        if modo_vuelo = <ATERRIZAJE_EMERGENCIA> or not hw_ok then (
+            modo_vuelo := <ATERRIZAJE_EMERGENCIA>;
+            return <ATERRIZAJE_EMERGENCIA>
+        )
+        -- Desde RETORNO_BASE, con HW operativo, se permanece en retorno a base
+        elseif modo_vuelo = <RETORNO_BASE> then
+            return <RETORNO_BASE>
+        -- T1 (y permanencia en EV): Proximidad en zona de alerta tiene prioridad sobre RB
+        elseif alerta_sep then (
+            modo_vuelo := <EVASION>;
+            return <EVASION>
+        )
+        -- T3, T4: Bateria baja o alarma ROJO con separacion segura -> RB
+        elseif requiere_retorno then (
+            modo_vuelo := <RETORNO_BASE>;
+            return <RETORNO_BASE>
+        )
+        -- T2 (y permanencia en VN): Condiciones nominales -> VN
+        else (
+            modo_vuelo := <VUELO_NORMAL>;
+            return <VUELO_NORMAL>
+        )
+    )
+    post (modo_vuelo~ = <ATERRIZAJE_EMERGENCIA> => modo_vuelo = <ATERRIZAJE_EMERGENCIA>)
+         and ((helices_ok < 3 or alarma = <CRITICO>) => modo_vuelo = <ATERRIZAJE_EMERGENCIA>);
+
+    -- Registra consumo energetico y reevalua el modo de vuelo
+    public ConsumirEnergia : real ==> bool
+    ConsumirEnergia(c) == (
+        dcl ok : bool := energia.ActualizarEnergia(c);
+        dcl m_actual : ModoVuelo := EvaluarModoVuelo();
+        if m_actual = <ATERRIZAJE_EMERGENCIA> then
+            return false
+        else
+            return ok
+    )
+    pre c > 0.0;
+
+    -- Ajusta costo de retorno por viento/entorno y actualiza nivel de alarma
+    public ActualizarEntorno : real * NivelAlarma ==> ModoVuelo
+    ActualizarEntorno(nuevo_retorno, nueva_alarma) == (
+        dcl ok : bool := energia.AjustarCostoRetorno(nuevo_retorno);
+        atomic (
+            alarma := nueva_alarma;
+            modo_vuelo := if nueva_alarma = <CRITICO>
+                          then <ATERRIZAJE_EMERGENCIA>
+                          else modo_vuelo
+        );
+        if ok then
+            return EvaluarModoVuelo()
+        else
+            return EvaluarModoVuelo()
+    )
+    pre nuevo_retorno >= 0.0;
+
+    -- Reporta falla de helice y actualiza estado de control de forma atomica
+    public ReportarFallaHelice : IdHelice ==> ModoVuelo
+    ReportarFallaHelice(h) == (
+        propulsion.ReportarFalla(h);
+        atomic (
+            helices_ok := propulsion.CantidadActivas();
+            modo_vuelo := if propulsion.CantidadActivas() < 3
+                          then <ATERRIZAJE_EMERGENCIA>
+                          else modo_vuelo
+        );
+        return EvaluarModoVuelo()
+    )
+    pre propulsion.EstaActiva(h)
+    post helices_ok = propulsion.CantidadActivas();
+
+    -- Registra un vecino seguro (>= 7 m) y evalua si entra en zona de alerta (< 12 m)
+    public RegistrarVecino : IdDron * Pos3D ==> ModoVuelo
+    RegistrarVecino(vid, p) == (
+        espacio.RegistrarVecino(vid, p);
+        return EvaluarModoVuelo()
+    )
+    pre vid <> id and not espacio.ViolaBarreraSeguridad(p);
+
+    -- Retira un vecino y reevalua si puede salir de EVASION
+    public RetirarVecino : IdDron ==> ModoVuelo
+    RetirarVecino(vid) == (
+        espacio.RetirarVecino(vid);
+        return EvaluarModoVuelo()
+    );
+
+    -- Agrega waypoint a la mision
+    public AgregarWaypoint : Waypoint ==> ()
+    AgregarWaypoint(w) == mision.AgregarWaypoint(w);
+
+    -- Avanza al siguiente waypoint consumiendo energia, solo en VUELO_NORMAL
+    public AvanzarMision : real ==> bool
+    AvanzarMision(consumo) == (
+        if modo_vuelo = <VUELO_NORMAL> and mision.HaySiguiente() then (
+            dcl destino : Pos3D := mision.SiguienteWaypoint();
+            if energia.ActualizarEnergia(consumo) then (
+                espacio.ActualizarPosicion(destino);
+                mision.Avanzar();
+                return true
+            )
+            else (
+                dcl m_post : ModoVuelo := EvaluarModoVuelo();
+                return m_post = <VUELO_NORMAL>
+            )
+        )
+        else
+            return false
+    )
+    pre consumo > 0.0;
+
+    public pure GetId : () ==> IdDron
+    GetId() == return id;
+
+    public pure GetBase : () ==> IdBase
+    GetBase() == return base_designada;
+
+    public pure GetModoVuelo : () ==> ModoVuelo
+    GetModoVuelo() == return modo_vuelo;
+
+    public pure GetAlarma : () ==> NivelAlarma
+    GetAlarma() == return alarma;
+
+    public pure GetEstadoPropulsion : () ==> EstadoPropulsion
+    GetEstadoPropulsion() == return propulsion.EstadoActual();
+
+    public pure GetEnergiaActual : () ==> real
+    GetEnergiaActual() == return energia.GetEnergiaActual();
+
+    public pure GetPuntoActual : () ==> Waypoint
+    GetPuntoActual() == return mision.PuntoActual();
+
+    public pure GetEspacio : () ==> EspacioAereo
+    GetEspacio() == return espacio;
+
+    public pure GetEnergia : () ==> GestionEnergia
+    GetEnergia() == return energia;
+
+    public pure GetPropulsion : () ==> SistemaPropulsion
+    GetPropulsion() == return propulsion;
+
+    public pure GetMision : () ==> Mision
+    GetMision() == return mision;
+
+end Dron

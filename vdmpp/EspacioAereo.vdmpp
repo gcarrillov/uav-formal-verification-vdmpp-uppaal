@@ -1,0 +1,61 @@
+-- ============================================================================
+-- Clase: EspacioAereo (RF2 - Separacion tridimensional y alerta preventiva)
+-- ============================================================================
+class EspacioAereo is subclass of Tipos
+
+instance variables
+    private posicion_propia : Pos3D := mk_Pos3D(0.0, 0.0, 0.0);
+    private vecinos         : map IdDron to Pos3D := {|->};
+
+    -- INV2: Todo vecino registrado mantiene separacion >= 7.0 m (d^2 >= 49)
+    inv posicion_propia.z >= 0.0
+        and forall id in set dom vecinos &
+            EsDistanciaSegura(posicion_propia, vecinos(id));
+
+operations
+    public EspacioAereo : () ==> EspacioAereo
+    EspacioAereo() == (
+        posicion_propia := mk_Pos3D(0.0, 0.0, 0.0);
+        vecinos := {|->};
+    );
+
+    -- Registra o actualiza un vecino que cumple la separacion segura (>= 7 m)
+    public RegistrarVecino : IdDron * Pos3D ==> ()
+    RegistrarVecino(id, p) ==
+        vecinos := vecinos ++ { id |-> p }
+    pre EsDistanciaSegura(posicion_propia, p)
+    post vecinos = vecinos~ ++ { id |-> p };
+
+    -- Retira un vecino que salio del rango del sensor
+    public RetirarVecino : IdDron ==> ()
+    RetirarVecino(id) ==
+        vecinos := {id} <-: vecinos
+    pre id in set dom vecinos
+    post id not in set dom vecinos;
+
+    -- Actualiza la posicion propia del dron verificando separacion respecto a todos los vecinos
+    public ActualizarPosicion : Pos3D ==> ()
+    ActualizarPosicion(nueva) ==
+        posicion_propia := nueva
+    pre nueva.z >= 0.0
+        and forall id in set dom vecinos & EsDistanciaSegura(nueva, vecinos(id))
+    post posicion_propia = nueva;
+
+    -- Detecta si algun vecino esta dentro de la zona de alerta temprana [7m, 12m)
+    public pure HayAlertaProximidad : () ==> bool
+    HayAlertaProximidad() ==
+        return exists id in set dom vecinos &
+            RequiereEvasion(posicion_propia, vecinos(id));
+
+    -- Consulta segura antes de registrar un contacto: true si violaria la barrera dura (< 7 m)
+    public pure ViolaBarreraSeguridad : Pos3D ==> bool
+    ViolaBarreraSeguridad(p) ==
+        return not EsDistanciaSegura(posicion_propia, p);
+
+    public pure GetPosicion : () ==> Pos3D
+    GetPosicion() == return posicion_propia;
+
+    public pure GetCantidadVecinos : () ==> nat
+    GetCantidadVecinos() == return card dom vecinos;
+
+end EspacioAereo

@@ -1,0 +1,173 @@
+-- ============================================================================
+-- Clase: Test (Suite de validacion integral y analisis de cobertura al 100%)
+-- Casos CP1..CP8 cubriendo RF1..RF6, INV1..INV7 y transiciones T1..T8
+-- ============================================================================
+class Test is subclass of Tipos
+
+operations
+    -- CP1: Consumo energetico nominal y avance de mision (RF1, INV1, INV4, INV5)
+    public CP1_ConsumoYMision : () ==> bool
+    CP1_ConsumoYMision() == (
+        dcl d : Dron := new Dron(mk_token("DRON_1"), mk_token("BASE_UNSA"));
+        dcl ok1 : bool;
+        dcl ok2 : bool;
+        d.AgregarWaypoint(mk_Pos3D(10.0, 0.0, 15.0));
+        d.AgregarWaypoint(mk_Pos3D(20.0, 5.0, 15.0));
+        ok1 := d.ConsumirEnergia(15.0);
+        ok2 := d.AvanzarMision(10.0);
+        return ok1 and ok2
+               and d.GetEnergiaActual() = 75.0
+               and d.GetEnergia().GetEnergiaRetorno() = 20.0
+               and d.GetEnergia().GetEnergiaReserva() = 10.0
+               and len d.GetEnergia().GetHistorial() = 3
+               and d.GetPuntoActual() = mk_Pos3D(10.0, 0.0, 15.0)
+               and d.GetMision().GetIndice() = 2
+               and d.GetMision().LongitudRuta() = 3
+               and d.GetBase() = mk_token("BASE_UNSA")
+               and d.GetModoVuelo() = <VUELO_NORMAL>
+    );
+
+    -- CP2: Rechazo de consumo excesivo preserva INV1 y dispara T3 (VN -> RB)
+    public CP2_ProteccionEnergiaYRetorno : () ==> bool
+    CP2_ProteccionEnergiaYRetorno() == (
+        dcl d : Dron := new Dron(mk_token("DRON_2"), mk_token("BASE_UNSA"));
+        dcl ok_rechazado : bool;
+        dcl ok_avanza_rb : bool;
+        dcl m_permanece : ModoVuelo;
+        d.AgregarWaypoint(mk_Pos3D(15.0, 0.0, 10.0));
+        ok_rechazado := d.ConsumirEnergia(75.0); -- 100 - 75 = 25 < 20 + 10 = 30
+        ok_avanza_rb := d.AvanzarMision(5.0);    -- bloqueado porque ya esta en RB
+        m_permanece := d.EvaluarModoVuelo();     -- permanece en RB
+        return (not ok_rechazado)
+               and (not ok_avanza_rb)
+               and d.GetEnergiaActual() = 100.0
+               and d.GetModoVuelo() = <RETORNO_BASE>
+               and m_permanece = <RETORNO_BASE>
+    );
+
+    -- CP3: Evasion preventiva 3D (T1: VN -> EV, T2: EV -> VN) y deteccion de intruso (< 7 m)
+    public CP3_SeparacionYEvasion3D : () ==> bool
+    CP3_SeparacionYEvasion3D() == (
+        dcl d : Dron := new Dron(mk_token("DRON_3"), mk_token("BASE_UNSA"));
+        dcl v_intruso : Pos3D := mk_Pos3D(3.0, 4.0, 0.0); -- dist = 5m < 7m
+        dcl v_alerta  : Pos3D := mk_Pos3D(8.0, 0.0, 0.0); -- dist = 8m en [7m, 12m)
+        dcl v_lejano  : Pos3D := mk_Pos3D(20.0, 0.0, 0.0); -- dist = 20m >= 12m
+        dcl bloqueado : bool;
+        dcl m1 : ModoVuelo;
+        dcl m2 : ModoVuelo;
+        dcl m3 : ModoVuelo;
+        bloqueado := d.GetEspacio().ViolaBarreraSeguridad(v_intruso);
+        m1 := d.RegistrarVecino(mk_token("VEC_1"), v_lejano); -- sigue VN
+        m2 := d.RegistrarVecino(mk_token("VEC_2"), v_alerta); -- T1: VN -> EV
+        m3 := d.RetirarVecino(mk_token("VEC_2"));             -- T2: EV -> VN
+        return bloqueado
+               and m1 = <VUELO_NORMAL>
+               and m2 = <EVASION>
+               and m3 = <VUELO_NORMAL>
+               and d.GetEspacio().GetPosicion() = mk_Pos3D(0.0, 0.0, 0.0)
+               and d.GetEspacio().GetCantidadVecinos() = 1
+    );
+
+    -- CP4: Prioridad de evasion sobre retorno y transicion T4 (EV -> RB)
+    public CP4_PrioridadEvasionSobreRetorno : () ==> bool
+    CP4_PrioridadEvasionSobreRetorno() == (
+        dcl d : Dron := new Dron(mk_token("DRON_4"), mk_token("BASE_UNSA"));
+        dcl m_ev : ModoVuelo;
+        dcl ok_en : bool;
+        dcl m_aun_ev : ModoVuelo;
+        dcl m_rb : ModoVuelo;
+        m_ev := d.RegistrarVecino(mk_token("VEC_A"), mk_Pos3D(9.0, 0.0, 0.0)); -- VN -> EV
+        ok_en := d.ConsumirEnergia(80.0); -- rechaza energia y marca bateria_baja, pero EV prevalece
+        m_aun_ev := d.GetModoVuelo();
+        m_rb := d.RetirarVecino(mk_token("VEC_A")); -- despeja vecino => T4: EV -> RB
+        return m_ev = <EVASION>
+               and (not ok_en)
+               and m_aun_ev = <EVASION>
+               and m_rb = <RETORNO_BASE>
+    );
+
+    -- CP5: Degradacion progresiva de propulsion (4 -> 3 -> 2 helices) y pozo seguro AE (T5, T8)
+    public CP5_ToleranciaFallasYPozoSeguro : () ==> bool
+    CP5_ToleranciaFallasYPozoSeguro() == (
+        dcl d : Dron := new Dron(mk_token("DRON_5"), mk_token("BASE_UNSA"));
+        dcl m1 : ModoVuelo;
+        dcl e1 : EstadoPropulsion;
+        dcl m2 : ModoVuelo;
+        dcl e2 : EstadoPropulsion;
+        dcl m3 : ModoVuelo;
+        dcl ok_en_ae : bool;
+        m1 := d.ReportarFallaHelice(1);      -- 3 activas: DEGRADADO_3, sigue VN
+        e1 := d.GetEstadoPropulsion();
+        m2 := d.ReportarFallaHelice(2);      -- 2 activas: DEGRADADO_HELICOIDAL, T5: VN -> AE
+        e2 := d.GetEstadoPropulsion();
+        m3 := d.EvaluarModoVuelo();          -- T8: AE -> AE (absorbente)
+        ok_en_ae := d.ConsumirEnergia(5.0);  -- en AE retorna false
+        return m1 = <VUELO_NORMAL>
+               and e1 = <DEGRADADO_3>
+               and m2 = <ATERRIZAJE_EMERGENCIA>
+               and e2 = <DEGRADADO_HELICOIDAL>
+               and m3 = <ATERRIZAJE_EMERGENCIA>
+               and (not ok_en_ae)
+               and d.GetPropulsion().CantidadActivas() = 2
+    );
+
+    -- CP6: Alarma ambiental y ajuste dinamico de costo de retorno (RF1, T7: RB -> AE)
+    public CP6_AlarmaAmbientalYCostoRetorno : () ==> bool
+    CP6_AlarmaAmbientalYCostoRetorno() == (
+        dcl d : Dron := new Dron(mk_token("DRON_6"), mk_token("BASE_UNSA"));
+        dcl m_amarillo : ModoVuelo;
+        dcl m_rojo : ModoVuelo;
+        dcl m_critico : ModoVuelo;
+        m_amarillo := d.ActualizarEntorno(35.0, <AMARILLO>); -- 100 >= 35+10 => aceptado, sigue VN
+        m_rojo := d.ActualizarEntorno(95.0, <ROJO>);         -- 100 < 95+10 => bateria_baja + ROJO => RB
+        m_critico := d.ActualizarEntorno(35.0, <CRITICO>);   -- T7: RB -> AE
+        return m_amarillo = <VUELO_NORMAL>
+               and m_rojo = <RETORNO_BASE>
+               and m_critico = <ATERRIZAJE_EMERGENCIA>
+               and d.GetAlarma() = <CRITICO>
+    );
+
+    -- CP7: Avance de mision con rechazo energetico (rama else en AvanzarMision)
+    public CP7_AvanceRechazadoPorEnergia : () ==> bool
+    CP7_AvanceRechazadoPorEnergia() == (
+        dcl d : Dron := new Dron(mk_token("DRON_7"), mk_token("BASE_UNSA"));
+        dcl ok : bool;
+        d.AgregarWaypoint(mk_Pos3D(10.0, 10.0, 10.0));
+        ok := d.AvanzarMision(80.0); -- 100 - 80 < 30 => rechaza y pasa a RB
+        return (not ok)
+               and d.GetModoVuelo() = <RETORNO_BASE>
+               and d.GetMision().GetIndice() = 1
+    );
+
+    -- CP8: Gestion de Flota (registro, consulta y retiro con map inyectivo INV6)
+    public CP8_GestionFlota : () ==> bool
+    CP8_GestionFlota() == (
+        dcl f : Flota := new Flota();
+        dcl d1 : Dron;
+        dcl n1 : nat;
+        dcl n2 : nat;
+        f.Registrar(mk_token("F_D1"), mk_token("BASE_1"));
+        f.Registrar(mk_token("F_D2"), mk_token("BASE_1"));
+        n1 := f.CantidadDrones();
+        d1 := f.Obtener(mk_token("F_D1"));
+        f.Retirar(mk_token("F_D2"));
+        n2 := f.CantidadDrones();
+        return n1 = 2 and n2 = 1 and d1.GetId() = mk_token("F_D1")
+    );
+
+    -- Punto de entrada principal para ejecutar todos los casos de prueba
+    public EjecutarTodas : () ==> map seq of char to bool
+    EjecutarTodas() == (
+        return {
+            "CP1_ConsumoYMision"               |-> CP1_ConsumoYMision(),
+            "CP2_ProteccionEnergiaYRetorno"    |-> CP2_ProteccionEnergiaYRetorno(),
+            "CP3_SeparacionYEvasion3D"         |-> CP3_SeparacionYEvasion3D(),
+            "CP4_PrioridadEvasionSobreRetorno" |-> CP4_PrioridadEvasionSobreRetorno(),
+            "CP5_ToleranciaFallasYPozoSeguro"  |-> CP5_ToleranciaFallasYPozoSeguro(),
+            "CP6_AlarmaAmbientalYCostoRetorno" |-> CP6_AlarmaAmbientalYCostoRetorno(),
+            "CP7_AvanceRechazadoPorEnergia"    |-> CP7_AvanceRechazadoPorEnergia(),
+            "CP8_GestionFlota"                 |-> CP8_GestionFlota()
+        }
+    );
+
+end Test

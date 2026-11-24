@@ -1,0 +1,50 @@
+-- ============================================================================
+-- Clase: Mision (Gestion ordenada de ruta 3D sin waypoints repetidos)
+-- ============================================================================
+class Mision is subclass of Tipos
+
+instance variables
+    private ruta   : seq1 of Waypoint := [mk_Pos3D(0.0, 0.0, 0.0)];
+    private indice : nat1 := 1;
+
+    -- INV4: Sin puntos repetidos, altitud no negativa e indice dentro de rango
+    inv len ruta = card elems ruta
+        and (forall w in set elems ruta & w.z >= 0.0)
+        and indice <= len ruta;
+
+operations
+    public Mision : () ==> Mision
+    Mision() == (
+        ruta := [mk_Pos3D(0.0, 0.0, 0.0)];
+        indice := 1;
+    );
+
+    public AgregarWaypoint : Waypoint ==> ()
+    AgregarWaypoint(w) ==
+        ruta := ruta ^ [w]
+    pre w not in set elems ruta and w.z >= 0.0
+    post ruta = ruta~ ^ [w];
+
+    public Avanzar : () ==> ()
+    Avanzar() ==
+        indice := indice + 1
+    pre indice < len ruta
+    post indice = indice~ + 1;
+
+    public pure PuntoActual : () ==> Waypoint
+    PuntoActual() == return ruta(indice);
+
+    public pure SiguienteWaypoint : () ==> Waypoint
+    SiguienteWaypoint() == return ruta(indice + 1)
+    pre indice < len ruta;
+
+    public pure HaySiguiente : () ==> bool
+    HaySiguiente() == return indice < len ruta;
+
+    public pure GetIndice : () ==> nat1
+    GetIndice() == return indice;
+
+    public pure LongitudRuta : () ==> nat1
+    LongitudRuta() == return len ruta;
+
+end Mision

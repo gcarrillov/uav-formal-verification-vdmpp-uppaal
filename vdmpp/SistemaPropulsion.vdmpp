@@ -1,0 +1,61 @@
+-- ============================================================================
+-- Clase: SistemaPropulsion (RF3 y RF4 - Tolerancia a fallas de propulsores)
+-- Referencia fisica: degradacion en 3 niveles (Mueller & D'Andrea, ICRA 2014)
+-- ============================================================================
+class SistemaPropulsion is subclass of Tipos
+
+instance variables
+    private helices : map IdHelice to EstadoHelice := {
+        1 |-> <ACTIVA>,
+        2 |-> <ACTIVA>,
+        3 |-> <ACTIVA>,
+        4 |-> <ACTIVA>
+    };
+
+    -- INV3: Siempre estan mapeadas exactamente las 4 helices del cuadricoptero
+    inv dom helices = {1, 2, 3, 4};
+
+functions
+    -- Conjunto de helices actualmente operativas (uso del tipo Set)
+    public static activas : map IdHelice to EstadoHelice -> set of IdHelice
+    activas(m) ==
+        { h | h in set dom m & m(h) = <ACTIVA> };
+
+    -- Clasificacion de integridad de propulsion segun cardinalidad
+    public static clasificar : map IdHelice to EstadoHelice -> EstadoPropulsion
+    clasificar(m) ==
+        let n = card activas(m) in
+            if n = 4 then <NORMAL>
+            elseif n = 3 then <DEGRADADO_3>
+            else <DEGRADADO_HELICOIDAL>;
+
+operations
+    public SistemaPropulsion : () ==> SistemaPropulsion
+    SistemaPropulsion() == (
+        helices := {
+            1 |-> <ACTIVA>,
+            2 |-> <ACTIVA>,
+            3 |-> <ACTIVA>,
+            4 |-> <ACTIVA>
+        };
+    );
+
+    -- Reporta falla irreversible en una helice activa
+    public ReportarFalla : IdHelice ==> ()
+    ReportarFalla(h) ==
+        helices := helices ++ { h |-> <FALLADA> }
+    pre h in set dom helices and helices(h) = <ACTIVA>
+    post card activas(helices) = card activas(helices~) - 1
+         and helices(h) = <FALLADA>;
+
+    public pure EstadoActual : () ==> EstadoPropulsion
+    EstadoActual() == return clasificar(helices);
+
+    public pure CantidadActivas : () ==> nat
+    CantidadActivas() == return card activas(helices);
+
+    public pure EstaActiva : IdHelice ==> bool
+    EstaActiva(h) == return helices(h) = <ACTIVA>
+    pre h in set dom helices;
+
+end SistemaPropulsion

@@ -1,0 +1,35 @@
+-- ============================================================================
+-- Clase: Flota (Administracion de drones mediante inmap / map inyectivo)
+-- ============================================================================
+class Flota is subclass of Tipos
+
+instance variables
+    private drones : map IdDron to Dron := {|->};
+
+    -- INV6: Cada identificador denota un unico objeto Dron distinto
+    inv forall i, j in set dom drones & i <> j => drones(i) <> drones(j);
+
+operations
+    public Flota : () ==> Flota
+    Flota() == drones := {|->};
+
+    public Registrar : IdDron * IdBase ==> ()
+    Registrar(i, b) ==
+        drones := drones munion { i |-> new Dron(i, b) }
+    pre i not in set dom drones
+    post i in set dom drones and drones(i).GetId() = i;
+
+    public Retirar : IdDron ==> ()
+    Retirar(i) ==
+        drones := {i} <-: drones
+    pre i in set dom drones
+    post i not in set dom drones;
+
+    public pure Obtener : IdDron ==> Dron
+    Obtener(i) == return drones(i)
+    pre i in set dom drones;
+
+    public pure CantidadDrones : () ==> nat
+    CantidadDrones() == return card dom drones;
+
+end Flota

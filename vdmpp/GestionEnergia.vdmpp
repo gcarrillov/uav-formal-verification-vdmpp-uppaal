@@ -1,0 +1,104 @@
+-- ============================================================================
+-- Clase: GestionEnergia (RF1 - Presupuesto energetico e historial monotono)
+-- ============================================================================
+class GestionEnergia is subclass of Tipos
+
+types
+    -- Registro de estado energetico con invariante INV1
+    public EstadoEnergia ::
+        energia_actual  : real
+        energia_retorno : real
+        energia_reserva : real
+    inv e ==
+        e.energia_actual >= (e.energia_retorno + e.energia_reserva)
+        and e.energia_actual <= 100.0
+        and e.energia_retorno >= 0.0
+        and e.energia_reserva > 0.0;
+
+instance variables
+    private estado_bateria : EstadoEnergia := mk_EstadoEnergia(100.0, 20.0, 10.0);
+    private historial      : seq1 of real  := [100.0];
+    private bateria_baja   : bool          := false;
+
+    -- INV5: El historial termina en la energia actual y es monotono no creciente
+    inv historial(len historial) = estado_bateria.energia_actual
+        and forall i in set {1,...,len historial - 1} &
+            historial(i) >= historial(i + 1);
+
+operations
+    public GestionEnergia : () ==> GestionEnergia
+    GestionEnergia() == (
+        atomic (
+            estado_bateria := mk_EstadoEnergia(100.0, 20.0, 10.0);
+            historial := [100.0];
+            bateria_baja := false
+        );
+    );
+
+    -- Consume energia si y solo si preserva el umbral (retorno + reserva).
+    -- Si el consumo violaria INV1, rechaza la mutacion y activa bateria_baja.
+    public ActualizarEnergia : real ==> bool
+    ActualizarEnergia(consumo) == (
+        dcl nueva : real := estado_bateria.energia_actual - consumo;
+        if nueva >= (estado_bateria.energia_retorno + estado_bateria.energia_reserva)
+        then (
+            atomic (
+                estado_bateria := mk_EstadoEnergia(
+                    nueva,
+                    estado_bateria.energia_retorno,
+                    estado_bateria.energia_reserva
+                );
+                historial := historial ^ [nueva]
+            );
+            return true
+        )
+        else (
+            bateria_baja := true;
+            return false
+        )
+    )
+    pre consumo > 0.0
+    post (RESULT => estado_bateria.energia_actual = estado_bateria~.energia_actual - consumo
+                    and len historial = len historial~ + 1)
+         and (not RESULT => estado_bateria = estado_bateria~
+                            and historial = historial~
+                            and bateria_baja = true);
+
+    -- Actualiza dinamicamente el costo estimado de retorno (p. ej. por distancia/viento).
+    -- Si el nuevo costo compromete la reserva, marca bateria_baja sin violar INV1.
+    public AjustarCostoRetorno : real ==> bool
+    AjustarCostoRetorno(nuevo_retorno) == (
+        if estado_bateria.energia_actual >= (nuevo_retorno + estado_bateria.energia_reserva)
+        then (
+            estado_bateria := mk_EstadoEnergia(
+                estado_bateria.energia_actual,
+                nuevo_retorno,
+                estado_bateria.energia_reserva
+            );
+            return true
+        )
+        else (
+            bateria_baja := true;
+            return false
+        )
+    )
+    pre nuevo_retorno >= 0.0
+    post (RESULT => estado_bateria.energia_retorno = nuevo_retorno)
+         and (not RESULT => bateria_baja = true);
+
+    public pure GetEnergiaActual : () ==> real
+    GetEnergiaActual() == return estado_bateria.energia_actual;
+
+    public pure GetEnergiaRetorno : () ==> real
+    GetEnergiaRetorno() == return estado_bateria.energia_retorno;
+
+    public pure GetEnergiaReserva : () ==> real
+    GetEnergiaReserva() == return estado_bateria.energia_reserva;
+
+    public pure EsBateriaBaja : () ==> bool
+    EsBateriaBaja() == return bateria_baja;
+
+    public pure GetHistorial : () ==> seq1 of real
+    GetHistorial() == return historial;
+
+end GestionEnergia

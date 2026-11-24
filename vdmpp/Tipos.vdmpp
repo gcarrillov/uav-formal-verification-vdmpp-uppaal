@@ -1,0 +1,63 @@
+-- ============================================================================
+-- Clase base: Tipos
+-- Proyecto: Controlador Formal de Dron Cuadricoptero Autonomo
+-- Curso: Aspectos Formales de Especificacion y Verificacion (UNSA, 2026)
+-- ============================================================================
+class Tipos
+
+types
+    -- Identificadores abstractos (comparables unicamente por igualdad)
+    public IdDron = token;
+    public IdBase = token;
+
+    -- Identificador de helice del cuadricoptero (1..4)
+    public IdHelice = nat1
+    inv h == h <= 4;
+
+    -- Estados discretos mediante literales quote
+    public EstadoHelice = <ACTIVA> | <FALLADA>;
+
+    public EstadoPropulsion =
+        <NORMAL> | <DEGRADADO_3> | <DEGRADADO_HELICOIDAL>;
+
+    public ModoVuelo =
+        <VUELO_NORMAL> | <EVASION> | <RETORNO_BASE> | <ATERRIZAJE_EMERGENCIA>;
+
+    public NivelAlarma = <VERDE> | <AMARILLO> | <ROJO> | <CRITICO>;
+
+    -- Posicion tridimensional en metros (coordenadas cartesianas ENU)
+    public Pos3D ::
+        x : real
+        y : real
+        z : real;
+
+    public Waypoint = Pos3D;
+
+values
+    -- Radio duro de separacion minima (RF2): 7.0 m => d^2 >= 49.0
+    public D_SEGURIDAD : real = 7.0;
+    public D_SEGURIDAD2 : real = 49.0;
+
+    -- Radio de alerta temprana para activar evasion preventiva: 12.0 m => d^2 < 144.0
+    public D_ALERTA : real = 12.0;
+    public D_ALERTA2 : real = 144.0;
+
+functions
+    -- Distancia euclidea al cuadrado entre dos posiciones 3D (evita raiz cuadrada)
+    public static dist2 : Pos3D * Pos3D -> real
+    dist2(p, q) ==
+        (p.x - q.x) * (p.x - q.x) +
+        (p.y - q.y) * (p.y - q.y) +
+        (p.z - q.z) * (p.z - q.z);
+
+    -- Verifica si se cumple la barrera dura de separacion (>= 7.0 m)
+    public static EsDistanciaSegura : Pos3D * Pos3D -> bool
+    EsDistanciaSegura(p, q) ==
+        dist2(p, q) >= D_SEGURIDAD2;
+
+    -- Verifica si un vecino entra en la zona de alerta temprana (< 12.0 m)
+    public static RequiereEvasion : Pos3D * Pos3D -> bool
+    RequiereEvasion(p, q) ==
+        dist2(p, q) < D_ALERTA2;
+
+end Tipos
